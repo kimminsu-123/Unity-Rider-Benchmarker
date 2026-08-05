@@ -153,7 +153,7 @@ UnityRiderBench/
 - [x] PowerShell 설치 스크립트(`install.ps1`) 작성: 최신 Release 다운로드 → `%LOCALAPPDATA%\UnityRiderBench`에 배치 → 사용자 PATH 환경변수 등록
 - [x] README에 원라이너 설치 안내 추가
 - [ ] 버전 확인/업데이트 정책 결정 (CLI 실행 시 최신 버전 체크 여부 — MVP 포함 여부는 열린 질문으로 이관)
-- [ ] **미검증**: `release.yml` 워크플로 자체는 실제 태그 푸시로 실행해본 적 없음 — 첫 릴리스 태그 푸시 시 로그 확인 필요
+- [x] `v0.1.0` 태그 푸시로 `release.yml` 실제 실행 검증 완료(2026-08-05) — 모든 스텝 성공, `unityrider-bench-win-x64.zip` 정상 게시 확인
 
 ---
 
