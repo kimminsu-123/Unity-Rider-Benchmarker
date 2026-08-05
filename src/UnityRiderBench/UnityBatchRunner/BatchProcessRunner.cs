@@ -36,89 +36,56 @@ public static class BatchProcessRunner
         startInfo.ArgumentList.Add("-logFile");
         startInfo.ArgumentList.Add(logPath);
 
-        try
+        using var process = Process.Start(startInfo);
+        if (process is null)
         {
-            using var process = Process.Start(startInfo);
-            if (process is null)
-            {
-                return null;
-            }
-
-            var exited = WaitWithProgress(process, timeout, logPath);
-            if (!exited)
-            {
-                process.Kill(entireProcessTree: true);
-                return null;
-            }
-
-            if (!File.Exists(resultPath))
-            {
-                return null;
-            }
-
-            var json = File.ReadAllText(resultPath);
-            return JsonSerializer.Deserialize<DomainReloadResult>(
-                json,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            return null;
         }
-        finally
+
+        var exited = WaitWithProgress(process, timeout, logPath);
+        if (!exited)
         {
-            TryDelete(resultPath);
-            TryDelete(logPath);
+            process.Kill(entireProcessTree: true);
+            // 실패 원인 진단을 위해 로그는 지우지 않고 남겨둔다(수동 삭제 필요).
+            Console.Error.WriteLine($"  Unity 로그 (타임아웃 시점까지의 진행 기록): {logPath}");
+            return null;
         }
+
+        if (!File.Exists(resultPath))
+        {
+            Console.Error.WriteLine($"  Unity 로그 (결과 파일이 생성되지 않음): {logPath}");
+            return null;
+        }
+
+        var json = File.ReadAllText(resultPath);
+        var result = JsonSerializer.Deserialize<DomainReloadResult>(
+            json,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        TryDelete(resultPath);
+        TryDelete(logPath);
+        return result;
     }
 
     // Unity 최초 실행 시 Search 인덱싱 등으로 수 분~수십 분 걸릴 수 있어(Phase 5 검증에서 확인),
     // 단일 WaitForExit 대신 짧은 간격으로 폴링하며 진행 상황을 보여준다 — 무응답처럼 보이는 것을 방지.
+    //
+    // 프로그레스 바는 "커서를 절대 좌표로 한 번 저장해두고 그 자리를 계속 덮어쓰는" 방식 대신
+    // "매번 현재 커서 위치에서 방금 그린 줄 수만큼 위로 올라가 다시 그리는" 상대 이동 방식을 쓴다.
+    // 절대 좌표를 캐싱하면 터미널에 따라(스크롤, 콘솔 버퍼 크기 등) 좌표가 어긋나거나
+    // SetCursorPosition이 예외를 던져 렌더링이 통째로 멈추는 문제가 있었다(실사용 중 재현됨).
+    // 그래도 렌더링이 실패하면 예외를 폭넓게 잡아 텍스트 폴백으로 전환해 최소한 진행 상황
+    // 텍스트는 계속 보이도록 한다 — 화면이 40분간 완전히 비어 보이는 상황을 만들지 않기 위함.
     private static bool WaitWithProgress(Process process, TimeSpan timeout, string logPath)
     {
-        return Console.IsOutputRedirected
-            ? WaitWithPlainText(process, timeout, logPath)
-            : WaitWithProgressBar(process, timeout, logPath);
-    }
-
-    // 출력이 파일/파이프로 리다이렉트된 경우: 커서 제어가 의미 없으므로 기존처럼
-    // 30초 간격 텍스트 라인만 출력(수백~수천 줄의 스팸 방지).
-    private static bool WaitWithPlainText(Process process, TimeSpan timeout, string logPath)
-    {
         var elapsed = TimeSpan.Zero;
-        var nextLogAt = TextLogInterval;
+        var useBar = !Console.IsOutputRedirected;
+        var barLinesDrawn = 0;
+        var nextTextLogAt = TextLogInterval;
 
-        while (elapsed < timeout)
+        if (useBar)
         {
-            var waitMs = (int)Math.Min(TickInterval.TotalMilliseconds, (timeout - elapsed).TotalMilliseconds);
-            if (process.WaitForExit(waitMs))
-            {
-                return true;
-            }
-
-            elapsed += TickInterval;
-            if (elapsed >= nextLogAt)
-            {
-                nextLogAt += TextLogInterval;
-                Console.WriteLine($"  ...대기 중 (경과 {elapsed.TotalMinutes:0}분 / 제한 {timeout.TotalMinutes:0}분) — {BuildStatusText(process, logPath)}");
-            }
-        }
-
-        return false;
-    }
-
-    // 실제 터미널일 때: 프로그레스 바 + 상태 줄 두 칸을 매초 같은 자리에 덮어써서 갱신한다.
-    private static bool WaitWithProgressBar(Process process, TimeSpan timeout, string logPath)
-    {
-        var elapsed = TimeSpan.Zero;
-        var barRow = Console.CursorTop;
-        Console.WriteLine();
-        Console.WriteLine();
-        var statusRow = barRow + 1;
-        var renderingEnabled = true;
-
-        try
-        {
-            Console.CursorVisible = false;
-        }
-        catch (IOException)
-        {
+            TrySetCursorVisible(false);
         }
 
         try
@@ -132,19 +99,33 @@ public static class BatchProcessRunner
                 }
 
                 elapsed += TickInterval;
+                var status = BuildStatusText(process, logPath);
 
-                if (renderingEnabled)
+                if (useBar)
                 {
                     try
                     {
-                        var status = BuildStatusText(process, logPath);
-                        RenderProgressBar(barRow, statusRow, elapsed, timeout, status);
+                        barLinesDrawn = RenderProgressBar(barLinesDrawn, elapsed, timeout, status);
+                        continue;
                     }
-                    catch (Exception ex) when (ex is IOException or ArgumentOutOfRangeException)
+                    catch (Exception)
                     {
-                        // 콘솔 크기 조회 실패 등 렌더링 문제 — 이후로는 조용히 렌더링만 끄고 측정은 계속 진행
-                        renderingEnabled = false;
+                        // 이 터미널에서는 프로그레스 바 렌더링이 안 되는 것으로 판단 — 텍스트 폴백으로 전환
+                        useBar = false;
+                        if (barLinesDrawn > 0)
+                        {
+                            Console.WriteLine();
+                        }
+
+                        Console.WriteLine("  (이 터미널에서는 진행률 표시줄을 그릴 수 없어 텍스트로 전환합니다)");
+                        nextTextLogAt = elapsed;
                     }
+                }
+
+                if (elapsed >= nextTextLogAt)
+                {
+                    nextTextLogAt += TextLogInterval;
+                    Console.WriteLine($"  ...대기 중 (경과 {elapsed.TotalMinutes:0}분 / 제한 {timeout.TotalMinutes:0}분) — {status}");
                 }
             }
 
@@ -152,22 +133,36 @@ public static class BatchProcessRunner
         }
         finally
         {
-            try
+            if (useBar)
             {
-                Console.CursorVisible = true;
-                Console.SetCursorPosition(0, statusRow + 1);
-            }
-            catch (IOException)
-            {
+                TrySetCursorVisible(true);
             }
         }
     }
 
-    private static void RenderProgressBar(int barRow, int statusRow, TimeSpan elapsed, TimeSpan timeout, string status)
+    private static void TrySetCursorVisible(bool visible)
     {
+        try
+        {
+            Console.CursorVisible = visible;
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    // previousLineCount만큼 커서를 위로 올려 직전에 그린 줄을 덮어쓰고, 새로 그린 줄 수를 반환한다.
+    private static int RenderProgressBar(int previousLineCount, TimeSpan elapsed, TimeSpan timeout, string status)
+    {
+        if (previousLineCount > 0)
+        {
+            var targetTop = Math.Max(0, Console.CursorTop - previousLineCount);
+            Console.SetCursorPosition(0, targetTop);
+        }
+
         var ratio = timeout.TotalSeconds <= 0 ? 1.0 : Math.Clamp(elapsed.TotalSeconds / timeout.TotalSeconds, 0, 1);
         var filled = (int)(ProgressBarWidth * ratio);
-        var lineWidth = Math.Max(Console.WindowWidth - 1, 60);
+        var lineWidth = Math.Max(Console.WindowWidth - 1, 1);
 
         var prefix = "  [";
         var filledSegment = new string('█', filled);
@@ -176,7 +171,6 @@ public static class BatchProcessRunner
         var plainLength = prefix.Length + filledSegment.Length + emptySegment.Length + suffix.Length;
         var padding = new string(' ', Math.Max(0, lineWidth - plainLength));
 
-        Console.SetCursorPosition(0, barRow);
         Console.Write(prefix);
         Console.ForegroundColor = ratio < 0.7 ? ConsoleColor.Green : ratio < 0.9 ? ConsoleColor.Yellow : ConsoleColor.Red;
         Console.Write(filledSegment);
@@ -184,8 +178,8 @@ public static class BatchProcessRunner
         Console.Write(emptySegment);
         Console.Write(suffix);
         Console.Write(padding);
+        Console.WriteLine();
 
-        Console.SetCursorPosition(0, statusRow);
         var statusLine = "  " + status;
         if (statusLine.Length > lineWidth)
         {
@@ -193,6 +187,9 @@ public static class BatchProcessRunner
         }
 
         Console.Write(statusLine.PadRight(lineWidth));
+        Console.WriteLine();
+
+        return 2;
     }
 
     private static string FormatDuration(TimeSpan value) => value.ToString(@"mm\:ss");
