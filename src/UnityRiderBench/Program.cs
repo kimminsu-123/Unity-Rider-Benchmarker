@@ -1,4 +1,5 @@
 using System.CommandLine;
+using UnityRiderBench.Benchmark;
 using UnityRiderBench.Models;
 using UnityRiderBench.SpecCollector;
 
@@ -42,7 +43,33 @@ var benchCommand = new Command("bench", "실측 벤치마크만 실행")
 };
 benchCommand.SetHandler((bool cpu, bool disk, bool ram) =>
 {
-    Console.WriteLine("bench: Phase 2에서 구현 예정");
+    if (!cpu && !disk && !ram)
+    {
+        cpu = disk = ram = true;
+    }
+
+    if (cpu)
+    {
+        Console.WriteLine("CPU 벤치마크 실행 중 (약 2초)...");
+        var result = CpuBenchmark.Run();
+        Console.WriteLine($"  처리량 {result.Score:0.#} MB/s ({result.ThreadsUsed}스레드, {result.Elapsed.TotalSeconds:0.#}s)");
+    }
+
+    if (disk)
+    {
+        Console.WriteLine("디스크 I/O 벤치마크 실행 중...");
+        var result = DiskIoBenchmark.Run(Path.GetTempPath());
+        Console.WriteLine($"  순차 쓰기 {result.SequentialWriteMbPerSec:0.#} MB/s / 순차 읽기 {result.SequentialReadMbPerSec:0.#} MB/s");
+        Console.WriteLine($"  랜덤 쓰기 {result.RandomWriteIops:0.#} IOPS / 랜덤 읽기 {result.RandomReadIops:0.#} IOPS");
+        Console.WriteLine($"  대상 경로 {result.TargetPath}");
+    }
+
+    if (ram)
+    {
+        Console.WriteLine("RAM 대역폭 벤치마크 실행 중...");
+        var result = RamBenchmark.Run();
+        Console.WriteLine($"  대역폭(근사치) {result.BandwidthMbPerSec:0.#} MB/s");
+    }
 }, cpuOption, diskOption, ramOption);
 
 var rootCommand = new RootCommand("Unity + Rider 에디터 성능 벤치마크 CLI 도구")
