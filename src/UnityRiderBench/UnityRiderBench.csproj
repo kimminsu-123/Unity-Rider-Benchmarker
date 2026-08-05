@@ -15,4 +15,13 @@
     <PackageReference Include="System.Management" Version="10.0.10" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- ProbeScript~ 아래 스크립트는 대상 Unity 프로젝트에 주입되는 UnityEditor 코드 템플릿이다.
+         UnityEditor API를 참조하므로 이 CLI 프로젝트의 컴파일 대상에서 제외하고, 실행 파일과 함께 배포되도록 복사만 한다. -->
+    <Compile Remove="ProbeScript~\**\*.cs" />
+    <None Include="ProbeScript~\**\*.cs">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

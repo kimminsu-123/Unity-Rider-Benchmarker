@@ -37,8 +37,9 @@ Unity 게임엔진과 JetBrains Rider를 함께 사용하는 개발 환경에서
 - **CPU 벤치마크**: 멀티스레드 연산(해시 반복 또는 행렬 곱)으로 처리량 측정 → Unity 스크립트 컴파일/Burst 컴파일 체감 속도 추정
 - **디스크 I/O 벤치마크**: 대상 경로에 소용량 파일 다수 쓰기/읽기 → 순차 및 랜덤 IOPS 측정 (Library 캐시 갱신 시나리오 근사)
 - **RAM 벤치마크**: 대역폭 측정 (선택 항목, 우선순위 낮음)
-- **(확장) Unity 프로젝트 연동 벤치마크**: Unity Editor를 배치 모드(`-batchmode -quit -executeMethod`)로 무인(headless) 실행해 프로젝트 오픈 시 도메인 리로드/임포트 시간을 측정. GUI 창 없이 CLI 명령 한 번으로 완결되며, 측정용 Editor 스크립트는 CLI가 실행 시점에 대상 프로젝트의 `Assets/Editor/`에 임시 복사했다가 종료 후 자동 삭제한다.
-  > ⚠️ 확인 필요: 라이선스 미활성화 환경(예: CI 서버)에서는 배치 모드 실행 자체가 막힐 수 있음 — Unity Hub로 이미 로그인된 로컬 개발 머신 기준으로는 문제없을 것으로 예상되나 실제 검증 필요.
+- **(확장) Unity 프로젝트 연동 벤치마크**: Unity Editor를 배치 모드(`-batchmode -nographics -executeMethod`)로 무인(headless) 실행해 프로젝트 오픈 시 도메인 리로드/임포트 시간을 측정. GUI 창 없이 CLI 명령 한 번으로 완결되며, 측정용 Editor 스크립트는 CLI가 실행 시점에 대상 프로젝트의 `Assets/Editor/`에 임시 복사했다가 종료 후 자동 삭제한다.
+  구현 중 `-quit` 플래그는 사용하지 않기로 확정했다 — `RequestScriptReload()`에 의한 도메인 리로드는 비동기로 일어나므로, `AssemblyReloadEvents.afterAssemblyReload` 콜백이 실제로 완료된 뒤 프로브 스크립트가 스스로 `EditorApplication.Exit()`를 호출해야 리로드 소요 시간을 정확히 잴 수 있다. C# CLI 쪽은 안전장치로 타임아웃(5분) 후 프로세스 트리를 강제 종료한다.
+  > ⚠️ 실측 확인 결과(2026-08-05, 개발 머신 RAM 8GB/여유 1GB대, Unity 6000.3.6f1): 새로 만든 프로젝트에서 배치 모드 최초 실행 시 Unity 자체의 Search 인덱싱 단계("Start Indexing on Editor startup")에서 CPU를 계속 소모하며 10분 넘게 진행되지 않는 현상을 독립적으로 2회 재현했다. 프로브 스크립트나 도메인 리로드 로직 자체의 결함인지, 이 머신의 RAM 부족(스와핑)이 원인인지, Unity 6 Search 인덱싱의 배치 모드 이슈인지는 이번 세션에서 확정하지 못했다 — 더 사양이 좋은 머신 또는 이미 한 번 Editor GUI로 연 적 있는(인덱스가 준비된) 프로젝트로 재검증 필요. 첫 실행 예상 소요 시간을 5분보다 넉넉히 잡거나, 사전에 Editor GUI로 프로젝트를 한 번 열어 인덱싱을 끝내둔 뒤 CLI를 실행하는 것을 권장한다.
 
 ### 3.3 경로 기반 드라이브 진단
 - 사용자가 지정하거나 자동 감지한 다음 경로들의 드라이브 타입 판별:
@@ -135,21 +136,24 @@ UnityRiderBench/
 - [ ] 콘솔/Markdown/JSON 리포터 구현
 
 ### Phase 5 — (확장) Unity 프로젝트 연동 (헤드리스 실행)
-- [ ] Unity Hub 설치 목록(editors.json/레지스트리)에서 프로젝트의 `ProjectVersion.txt`와 일치하는 Editor 실행파일 자동 탐색
-- [ ] 도메인 리로드 측정용 Editor probe 스크립트 작성 (`AssemblyReloadEvents` + 배치 모드 종료 훅으로 결과를 JSON 파일에 기록)
-- [ ] CLI 실행 시 probe 스크립트를 대상 프로젝트 `Assets/Editor/`에 임시 복사 → `-batchmode -quit -executeMethod`로 헤드리스 실행 → 결과 JSON 파싱 → 임시 스크립트 자동 삭제(예외/타임아웃 시에도 삭제 보장)
+- [x] Unity Hub 설치 목록(editors.json/레지스트리)에서 프로젝트의 `ProjectVersion.txt`와 일치하는 Editor 실행파일 자동 탐색
+- [x] 도메인 리로드 측정용 Editor probe 스크립트 작성 (`AssemblyReloadEvents` + 배치 모드 종료 훅으로 결과를 JSON 파일에 기록)
+- [x] CLI 실행 시 probe 스크립트를 대상 프로젝트 `Assets/Editor/`에 임시 복사 → `-batchmode -nographics -executeMethod`로 헤드리스 실행 → 결과 JSON 파싱 → 임시 스크립트 자동 삭제(예외/타임아웃 시에도 삭제 보장)
 - [ ] 라이선스 미활성화 환경 대응 범위 확인 (에디터에서 실측 필요 — 열린 질문에 등록)
+- [ ] **미해결**: 실제 Unity 6000.3.6f1로 End-to-End 검증 시도 중 Search 인덱싱 단계에서 10분 이상 진행되지 않는 현상 2회 재현(2026-08-05). 더 사양 좋은 머신 및 인덱싱이 이미 끝난 프로젝트로 재검증 필요 — 열린 질문에 등록
 
 ### Phase 6 — 테스트
-- [ ] 다양한 사양의 실제 머신에서 검증
-- [ ] README 및 사용법 문서화
+- [x] BaselineRules/DriveMatcher/ReportFormatting 등 순수 로직 단위 테스트 작성(xUnit, 20건)
+- [ ] 다양한 사양의 실제 머신에서 검증 — 현재 개발 머신(1대) 외 미검증
+- [x] README 및 사용법 문서화
 
 ### Phase 7 — 배포 (GitHub Releases)
-- [ ] `dotnet publish -r win-x64 --self-contained -p:PublishSingleFile=true`로 단일 실행파일 빌드
-- [ ] GitHub Actions 워크플로(`release.yml`) 작성: `v*` 태그 푸시 시 자동 빌드 → GitHub Release 생성 → 실행파일 첨부
-- [ ] PowerShell 설치 스크립트(`install.ps1`) 작성: 최신 Release 다운로드 → `%LOCALAPPDATA%\UnityRiderBench`에 배치 → 사용자 PATH 환경변수 등록
-- [ ] README에 원라이너 설치 안내 추가 (예: `irm https://raw.githubusercontent.com/<repo>/main/install/install.ps1 | iex`)
+- [x] `dotnet publish -r win-x64 --self-contained -p:PublishSingleFile=true`로 단일 실행파일 빌드 스크립트 작성(GitHub Actions에 포함, 로컬 실행은 미검증)
+- [x] GitHub Actions 워크플로(`release.yml`) 작성: `v*` 태그 푸시 시 자동 빌드 → GitHub Release 생성 → 실행파일 첨부
+- [x] PowerShell 설치 스크립트(`install.ps1`) 작성: 최신 Release 다운로드 → `%LOCALAPPDATA%\UnityRiderBench`에 배치 → 사용자 PATH 환경변수 등록
+- [x] README에 원라이너 설치 안내 추가
 - [ ] 버전 확인/업데이트 정책 결정 (CLI 실행 시 최신 버전 체크 여부 — MVP 포함 여부는 열린 질문으로 이관)
+- [ ] **미검증**: `release.yml` 워크플로 자체는 실제 태그 푸시로 실행해본 적 없음 — 첫 릴리스 태그 푸시 시 로그 확인 필요
 
 ---
 
@@ -178,3 +182,4 @@ unityrider-bench scan --output report.md
 - 라이선스 미활성화 환경(CI 서버 등)에서의 배치 모드 지원 범위 — MVP 제외 여부
 - CLI 자체 업데이트 확인 기능(버전 체크) MVP 포함 여부
 - macOS/Linux용 배포 스크립트는 Windows 우선 출시 이후로 미룰지
+- Phase 5 배치 모드 실행이 Unity Search 인덱싱 단계에서 장시간(10분+) 멈추는 현상의 원인 규명 — 인덱싱이 끝난 프로젝트/더 사양 좋은 머신에서 재검증, 필요 시 인덱싱 비활성화 옵션 조사

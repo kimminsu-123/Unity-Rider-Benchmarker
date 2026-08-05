@@ -5,6 +5,7 @@ using UnityRiderBench.PathAnalysis;
 using UnityRiderBench.Report;
 using UnityRiderBench.Rules;
 using UnityRiderBench.SpecCollector;
+using UnityRiderBench.UnityBatchRunner;
 
 var projectPathOption = new Option<string?>("--project-path", "Unity 프로젝트 루트 경로");
 var riderPathOption = new Option<string?>("--rider-path", "Rider 설치 경로");
@@ -39,7 +40,11 @@ scanCommand.SetHandler((string? projectPath, string? riderPath, string? output) 
     var pathDiagnosis = PathDiagnosisBuilder.Build(spec, projectPath, riderPath);
     var gradedItems = BaselineRules.Evaluate(spec);
 
-    var report = new ScanReport(DateTimeOffset.Now, spec, benchmark, pathDiagnosis, gradedItems, DomainReload: null);
+    var domainReload = string.IsNullOrWhiteSpace(projectPath)
+        ? null
+        : TryRunDomainReloadProbe(projectPath);
+
+    var report = new ScanReport(DateTimeOffset.Now, spec, benchmark, pathDiagnosis, gradedItems, domainReload);
 
     WriteReport(report, output);
 }, projectPathOption, riderPathOption, outputOption);
@@ -102,6 +107,36 @@ var rootCommand = new RootCommand("Unity + Rider 에디터 성능 벤치마크 C
 };
 
 return await rootCommand.InvokeAsync(args);
+
+static DomainReloadResult? TryRunDomainReloadProbe(string projectPath)
+{
+    var editorVersion = UnityInstallLocator.TryReadProjectEditorVersion(projectPath);
+    if (editorVersion is null)
+    {
+        Console.Error.WriteLine("Unity 프로젝트 버전을 확인할 수 없어(ProjectSettings/ProjectVersion.txt 없음) 도메인 리로드 측정을 건너뜁니다.");
+        return null;
+    }
+
+    var unityExePath = UnityInstallLocator.FindUnityExecutable(editorVersion);
+    if (unityExePath is null)
+    {
+        Console.Error.WriteLine($"Unity {editorVersion} 실행 파일을 찾을 수 없어 도메인 리로드 측정을 건너뜁니다.");
+        return null;
+    }
+
+    Console.WriteLine($"Unity {editorVersion} 배치 모드로 도메인 리로드 측정 중 (헤드리스, 수 분 소요될 수 있음)...");
+
+    using var probe = new ProbeInjector(projectPath);
+    probe.Inject();
+    var result = BatchProcessRunner.Run(unityExePath, projectPath);
+
+    if (result is null)
+    {
+        Console.Error.WriteLine("도메인 리로드 측정에 실패했습니다 (배치 프로세스 타임아웃 또는 결과 파일 누락).");
+    }
+
+    return result;
+}
 
 static void WriteReport(ScanReport report, string? outputPath)
 {
