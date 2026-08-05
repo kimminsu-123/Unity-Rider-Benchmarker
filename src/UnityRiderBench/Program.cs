@@ -126,6 +126,15 @@ static DomainReloadResult? TryRunDomainReloadProbe(string projectPath, int unity
         return null;
     }
 
+    var runningPid = UnityInstallLocator.FindRunningUnityProcessId(projectPath);
+    if (runningPid is int pid)
+    {
+        Console.Error.WriteLine($"이 프로젝트를 이미 Unity 프로세스(PID {pid})가 열고 있어 도메인 리로드 측정을 건너뜁니다.");
+        Console.Error.WriteLine("Editor GUI에서 직접 연 것이 아니라면 이전 실행이 비정상 종료되며 남은 좀비 프로세스일 수 있습니다 —");
+        Console.Error.WriteLine($"  작업 관리자 또는 `taskkill /F /T /PID {pid}`로 종료한 뒤 다시 시도하세요.");
+        return null;
+    }
+
     Console.WriteLine($"Unity {editorVersion} 배치 모드로 도메인 리로드 측정 중 (헤드리스, 최대 {unityTimeoutMinutes}분)...");
 
     using var probe = new ProbeInjector(projectPath);

@@ -42,29 +42,58 @@ public static class BatchProcessRunner
             return null;
         }
 
-        var exited = WaitWithProgress(process, timeout, logPath);
-        if (!exited)
+        // Ctrl+C로 CLI 자체가 중단되면 using의 Process.Dispose()는 OS 프로세스를 죽이지 않으므로
+        // Unity 자식 프로세스가 고아로 남아 프로젝트 락을 계속 쥐고 있게 된다(실사용 중 재현됨,
+        // 이후 실행이 즉시 "Exiting without the bug reporter"로 실패하는 원인). Ctrl+C를 가로채
+        // 자식을 먼저 정리한 뒤 기본 종료가 이어지도록 한다.
+        ConsoleCancelEventHandler onCancel = (_, _) => TryKillProcessTree(process);
+        Console.CancelKeyPress += onCancel;
+
+        try
         {
-            process.Kill(entireProcessTree: true);
-            // 실패 원인 진단을 위해 로그는 지우지 않고 남겨둔다(수동 삭제 필요).
-            Console.Error.WriteLine($"  Unity 로그 (타임아웃 시점까지의 진행 기록): {logPath}");
-            return null;
-        }
+            var exited = WaitWithProgress(process, timeout, logPath);
+            if (!exited)
+            {
+                TryKillProcessTree(process);
+                // 실패 원인 진단을 위해 로그는 지우지 않고 남겨둔다(수동 삭제 필요).
+                Console.Error.WriteLine($"  Unity 로그 (타임아웃 시점까지의 진행 기록): {logPath}");
+                return null;
+            }
 
-        if (!File.Exists(resultPath))
+            if (!File.Exists(resultPath))
+            {
+                Console.Error.WriteLine($"  Unity 로그 (결과 파일이 생성되지 않음): {logPath}");
+                return null;
+            }
+
+            var json = File.ReadAllText(resultPath);
+            var result = JsonSerializer.Deserialize<DomainReloadResult>(
+                json,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            TryDelete(resultPath);
+            TryDelete(logPath);
+            return result;
+        }
+        finally
         {
-            Console.Error.WriteLine($"  Unity 로그 (결과 파일이 생성되지 않음): {logPath}");
-            return null;
+            Console.CancelKeyPress -= onCancel;
         }
+    }
 
-        var json = File.ReadAllText(resultPath);
-        var result = JsonSerializer.Deserialize<DomainReloadResult>(
-            json,
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-
-        TryDelete(resultPath);
-        TryDelete(logPath);
-        return result;
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch (Exception)
+        {
+            // 이미 종료 중이거나 접근 불가 — 최선을 다한 정리이므로 무시
+        }
     }
 
     // Unity 최초 실행 시 Search 인덱싱 등으로 수 분~수십 분 걸릴 수 있어(Phase 5 검증에서 확인),
