@@ -15,8 +15,9 @@ Unity 게임엔진과 JetBrains Rider를 함께 사용하는 개발 환경에서
 ## 2. 대상 환경 및 스택
 
 - **대상 OS**: Windows 우선 (WMI 활용도가 높아 진단 정확도가 좋음). 추후 macOS 확장 여지 남겨둠.
-- **언어/런타임**: C# (.NET 8) — CLI 앱
+- **언어/런타임**: C# (.NET 10) — CLI 앱
   - 이유: `System.Management`(WMI) 접근이 자연스럽고, Unity/Rider 사용자 대상 도구로서 진입장벽이 낮음
+  - 참고: 최초 계획은 .NET 8이었으나 개발 머신에 .NET 10 SDK만 설치되어 있어 net10.0으로 타겟 조정. 배포는 self-contained 게시이므로 최종 사용자 머신의 런타임 설치 여부와 무관함.
   - 대안: Python(`psutil`, `py-cpuinfo`, `wmi`)으로 빠른 프로토타입 후 포팅도 가능 — 초기 속도 우선이면 이 경로 채택
 - **CLI 프레임워크**: `System.CommandLine` (또는 Python이면 `argparse`/`typer`)
 - **출력 형식**: 콘솔 리포트(기본) + `--json`, `--markdown` 리포트 파일 저장 옵션

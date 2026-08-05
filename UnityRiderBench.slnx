@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/UnityRiderBench/UnityRiderBench.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/UnityRiderBench.Tests/UnityRiderBench.Tests.csproj" />
+  </Folder>
+</Solution>
