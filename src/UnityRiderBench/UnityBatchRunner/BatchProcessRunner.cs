@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using UnityRiderBench.Models;
 
@@ -11,6 +12,18 @@ public static class BatchProcessRunner
     private static readonly TimeSpan TextLogInterval = TimeSpan.FromSeconds(30);
     private const int ProgressBarWidth = 40;
     private const int LogTailReadBytes = 4096;
+
+    private const int StdOutputHandle = -11;
+    private const uint EnableVirtualTerminalProcessing = 0x0004;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GetStdHandle(int nStdHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
 
     // -quit을 쓰지 않는 이유는 ProbeScript~/DomainReloadProbe.cs 상단 주석 참고 —
     // 도메인 리로드 완료를 콜백으로 확인한 뒤 프로브 스크립트가 스스로 EditorApplication.Exit()를 호출한다.
@@ -81,6 +94,37 @@ public static class BatchProcessRunner
         }
     }
 
+    // Windows 콘솔은 기본적으로 VT(ANSI 이스케이프) 처리가 꺼져 있을 수 있다. 켜는 데 실패하면
+    // (구형 콘솔 호스트 등) 프로그레스 바를 아예 쓰지 않고 텍스트 모드로 폴백해, ANSI 코드가
+    // 그대로 글자로 화면에 찍히는 상황을 피한다.
+    private static bool TryEnableAnsi()
+    {
+        try
+        {
+            var handle = GetStdHandle(StdOutputHandle);
+            if (handle == IntPtr.Zero || handle == new IntPtr(-1))
+            {
+                return false;
+            }
+
+            if (!GetConsoleMode(handle, out var mode))
+            {
+                return false;
+            }
+
+            if ((mode & EnableVirtualTerminalProcessing) != 0)
+            {
+                return true;
+            }
+
+            return SetConsoleMode(handle, mode | EnableVirtualTerminalProcessing);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     private static void TryKillProcessTree(Process process)
     {
         try
@@ -99,16 +143,17 @@ public static class BatchProcessRunner
     // Unity 최초 실행 시 Search 인덱싱 등으로 수 분~수십 분 걸릴 수 있어(Phase 5 검증에서 확인),
     // 단일 WaitForExit 대신 짧은 간격으로 폴링하며 진행 상황을 보여준다 — 무응답처럼 보이는 것을 방지.
     //
-    // 프로그레스 바는 "커서를 절대 좌표로 한 번 저장해두고 그 자리를 계속 덮어쓰는" 방식 대신
-    // "매번 현재 커서 위치에서 방금 그린 줄 수만큼 위로 올라가 다시 그리는" 상대 이동 방식을 쓴다.
-    // 절대 좌표를 캐싱하면 터미널에 따라(스크롤, 콘솔 버퍼 크기 등) 좌표가 어긋나거나
-    // SetCursorPosition이 예외를 던져 렌더링이 통째로 멈추는 문제가 있었다(실사용 중 재현됨).
+    // 프로그레스 바는 Console.SetCursorPosition(Win32 SetConsoleCursorPosition 래핑) 대신
+    // ANSI 이스케이프(\x1b[nA 커서 위로, \x1b[2K 줄 지우기)로 직접 그린다. ConPTY 기반 최신
+    // 터미널 호스트(Windows Terminal, PowerShell 7, VS Code 통합 터미널)에서 SetCursorPosition이
+    // 예외 없이 조용히 no-op되어 매초 새 줄이 계속 쌓이는 문제가 실사용 중 재현됐기 때문이다.
+    // VT 처리 활성화(TryEnableAnsi)에 실패하면 애초에 useBar를 켜지 않고,
     // 그래도 렌더링이 실패하면 예외를 폭넓게 잡아 텍스트 폴백으로 전환해 최소한 진행 상황
     // 텍스트는 계속 보이도록 한다 — 화면이 40분간 완전히 비어 보이는 상황을 만들지 않기 위함.
     private static bool WaitWithProgress(Process process, TimeSpan timeout, string logPath)
     {
         var elapsed = TimeSpan.Zero;
-        var useBar = !Console.IsOutputRedirected;
+        var useBar = !Console.IsOutputRedirected && TryEnableAnsi();
         var barLinesDrawn = 0;
         var nextTextLogAt = TextLogInterval;
 
@@ -180,42 +225,42 @@ public static class BatchProcessRunner
         }
     }
 
-    // previousLineCount만큼 커서를 위로 올려 직전에 그린 줄을 덮어쓰고, 새로 그린 줄 수를 반환한다.
+    // previousLineCount만큼 ANSI로 커서를 위로 올려 직전에 그린 줄을 지우고 새로 그린다.
+    // \x1b[2K로 줄 전체를 지우므로 수동 공백 패딩이 필요 없다.
     private static int RenderProgressBar(int previousLineCount, TimeSpan elapsed, TimeSpan timeout, string status)
     {
         if (previousLineCount > 0)
         {
-            var targetTop = Math.Max(0, Console.CursorTop - previousLineCount);
-            Console.SetCursorPosition(0, targetTop);
+            Console.Write($"\x1b[{previousLineCount}A");
         }
 
         var ratio = timeout.TotalSeconds <= 0 ? 1.0 : Math.Clamp(elapsed.TotalSeconds / timeout.TotalSeconds, 0, 1);
         var filled = (int)(ProgressBarWidth * ratio);
         var lineWidth = Math.Max(Console.WindowWidth - 1, 1);
 
-        var prefix = "  [";
         var filledSegment = new string('█', filled);
         var emptySegment = new string('-', ProgressBarWidth - filled);
         var suffix = $"] {ratio * 100,3:0}%  {FormatDuration(elapsed)} / {FormatDuration(timeout)}";
-        var plainLength = prefix.Length + filledSegment.Length + emptySegment.Length + suffix.Length;
-        var padding = new string(' ', Math.Max(0, lineWidth - plainLength));
 
-        Console.Write(prefix);
+        Console.Write("\x1b[2K");
+        Console.Write("  [");
         Console.ForegroundColor = ratio < 0.7 ? ConsoleColor.Green : ratio < 0.9 ? ConsoleColor.Yellow : ConsoleColor.Red;
         Console.Write(filledSegment);
         Console.ResetColor();
         Console.Write(emptySegment);
         Console.Write(suffix);
-        Console.Write(padding);
         Console.WriteLine();
 
+        // 상태 줄이 터미널 폭을 넘어 자동 줄바꿈되면 실제로 그려진 줄 수가 2를 넘게 되어
+        // 다음 틱의 "위로 2줄" 이동이 어긋난다 — 반드시 한 줄로 잘라서 그린다.
         var statusLine = "  " + status;
         if (statusLine.Length > lineWidth)
         {
             statusLine = statusLine[..lineWidth];
         }
 
-        Console.Write(statusLine.PadRight(lineWidth));
+        Console.Write("\x1b[2K");
+        Console.Write(statusLine);
         Console.WriteLine();
 
         return 2;
