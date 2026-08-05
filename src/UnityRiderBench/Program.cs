@@ -10,6 +10,7 @@ using UnityRiderBench.UnityBatchRunner;
 var projectPathOption = new Option<string?>("--project-path", "Unity 프로젝트 루트 경로");
 var riderPathOption = new Option<string?>("--rider-path", "Rider 설치 경로");
 var outputOption = new Option<string?>("--output", "리포트 저장 파일 경로 (.md 또는 .json)");
+var unityTimeoutOption = new Option<int>("--unity-timeout", () => 30, "Unity 배치 모드 도메인 리로드 측정 타임아웃(분)");
 
 var cpuOption = new Option<bool>("--cpu", "CPU 벤치마크 실행");
 var diskOption = new Option<bool>("--disk", "디스크 I/O 벤치마크 실행");
@@ -20,8 +21,9 @@ var scanCommand = new Command("scan", "전체 진단 실행 (스펙 + 벤치마�
     projectPathOption,
     riderPathOption,
     outputOption,
+    unityTimeoutOption,
 };
-scanCommand.SetHandler((string? projectPath, string? riderPath, string? output) =>
+scanCommand.SetHandler((string? projectPath, string? riderPath, string? output, int unityTimeoutMinutes) =>
 {
     if (!OperatingSystem.IsWindows())
     {
@@ -42,12 +44,12 @@ scanCommand.SetHandler((string? projectPath, string? riderPath, string? output) 
 
     var domainReload = string.IsNullOrWhiteSpace(projectPath)
         ? null
-        : TryRunDomainReloadProbe(projectPath);
+        : TryRunDomainReloadProbe(projectPath, unityTimeoutMinutes);
 
     var report = new ScanReport(DateTimeOffset.Now, spec, benchmark, pathDiagnosis, gradedItems, domainReload);
 
     WriteReport(report, output);
-}, projectPathOption, riderPathOption, outputOption);
+}, projectPathOption, riderPathOption, outputOption, unityTimeoutOption);
 
 var specCommand = new Command("spec", "정적 스펙 조회만 실행");
 specCommand.SetHandler(() =>
@@ -108,7 +110,7 @@ var rootCommand = new RootCommand("Unity + Rider 에디터 성능 벤치마크 C
 
 return await rootCommand.InvokeAsync(args);
 
-static DomainReloadResult? TryRunDomainReloadProbe(string projectPath)
+static DomainReloadResult? TryRunDomainReloadProbe(string projectPath, int unityTimeoutMinutes)
 {
     var editorVersion = UnityInstallLocator.TryReadProjectEditorVersion(projectPath);
     if (editorVersion is null)
@@ -124,15 +126,15 @@ static DomainReloadResult? TryRunDomainReloadProbe(string projectPath)
         return null;
     }
 
-    Console.WriteLine($"Unity {editorVersion} 배치 모드로 도메인 리로드 측정 중 (헤드리스, 수 분 소요될 수 있음)...");
+    Console.WriteLine($"Unity {editorVersion} 배치 모드로 도메인 리로드 측정 중 (헤드리스, 최대 {unityTimeoutMinutes}분)...");
 
     using var probe = new ProbeInjector(projectPath);
     probe.Inject();
-    var result = BatchProcessRunner.Run(unityExePath, projectPath);
+    var result = BatchProcessRunner.Run(unityExePath, projectPath, TimeSpan.FromMinutes(unityTimeoutMinutes));
 
     if (result is null)
     {
-        Console.Error.WriteLine("도메인 리로드 측정에 실패했습니다 (배치 프로세스 타임아웃 또는 결과 파일 누락).");
+        Console.Error.WriteLine($"도메인 리로드 측정에 실패했습니다 (배치 프로세스가 {unityTimeoutMinutes}분 안에 끝나지 않았거나 결과 파일이 없습니다. --unity-timeout으로 시간을 늘려보세요).");
     }
 
     return result;

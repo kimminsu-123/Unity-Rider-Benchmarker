@@ -38,8 +38,8 @@ Unity 게임엔진과 JetBrains Rider를 함께 사용하는 개발 환경에서
 - **디스크 I/O 벤치마크**: 대상 경로에 소용량 파일 다수 쓰기/읽기 → 순차 및 랜덤 IOPS 측정 (Library 캐시 갱신 시나리오 근사)
 - **RAM 벤치마크**: 대역폭 측정 (선택 항목, 우선순위 낮음)
 - **(확장) Unity 프로젝트 연동 벤치마크**: Unity Editor를 배치 모드(`-batchmode -nographics -executeMethod`)로 무인(headless) 실행해 프로젝트 오픈 시 도메인 리로드/임포트 시간을 측정. GUI 창 없이 CLI 명령 한 번으로 완결되며, 측정용 Editor 스크립트는 CLI가 실행 시점에 대상 프로젝트의 `Assets/Editor/`에 임시 복사했다가 종료 후 자동 삭제한다.
-  구현 중 `-quit` 플래그는 사용하지 않기로 확정했다 — `RequestScriptReload()`에 의한 도메인 리로드는 비동기로 일어나므로, `AssemblyReloadEvents.afterAssemblyReload` 콜백이 실제로 완료된 뒤 프로브 스크립트가 스스로 `EditorApplication.Exit()`를 호출해야 리로드 소요 시간을 정확히 잴 수 있다. C# CLI 쪽은 안전장치로 타임아웃(5분) 후 프로세스 트리를 강제 종료한다.
-  > ⚠️ 실측 확인 결과(2026-08-05, 개발 머신 RAM 8GB/여유 1GB대, Unity 6000.3.6f1): 새로 만든 프로젝트에서 배치 모드 최초 실행 시 Unity 자체의 Search 인덱싱 단계("Start Indexing on Editor startup")에서 CPU를 계속 소모하며 10분 넘게 진행되지 않는 현상을 독립적으로 2회 재현했다. 프로브 스크립트나 도메인 리로드 로직 자체의 결함인지, 이 머신의 RAM 부족(스와핑)이 원인인지, Unity 6 Search 인덱싱의 배치 모드 이슈인지는 이번 세션에서 확정하지 못했다 — 더 사양이 좋은 머신 또는 이미 한 번 Editor GUI로 연 적 있는(인덱스가 준비된) 프로젝트로 재검증 필요. 첫 실행 예상 소요 시간을 5분보다 넉넉히 잡거나, 사전에 Editor GUI로 프로젝트를 한 번 열어 인덱싱을 끝내둔 뒤 CLI를 실행하는 것을 권장한다.
+  구현 중 `-quit` 플래그는 사용하지 않기로 확정했다 — `RequestScriptReload()`에 의한 도메인 리로드는 비동기로 일어나므로, `AssemblyReloadEvents.afterAssemblyReload` 콜백이 실제로 완료된 뒤 프로브 스크립트가 스스로 `EditorApplication.Exit()`를 호출해야 리로드 소요 시간을 정확히 잴 수 있다. C# CLI 쪽은 안전장치로 타임아웃(기본 30분, `scan --unity-timeout <분>`으로 조절 가능) 후 프로세스 트리를 강제 종료하며, 30초 간격으로 경과 시간을 콘솔에 출력해 오래 대기해도 멈춘 것처럼 보이지 않도록 했다.
+  > ⚠️ 실측 확인 결과(2026-08-05, 개발 머신 RAM 8GB/여유 1GB대, Unity 6000.3.6f1): 새로 만든 프로젝트에서 배치 모드 최초 실행 시 Unity 자체의 Search 인덱싱 단계("Start Indexing on Editor startup")에서 CPU를 계속 소모하며 10분 넘게 진행되지 않는 현상을 독립적으로 2회 재현했다. 프로브 스크립트나 도메인 리로드 로직 자체의 결함인지, 이 머신의 RAM 부족(스와핑)이 원인인지, Unity 6 Search 인덱싱의 배치 모드 이슈인지는 이번 세션에서 확정하지 못했다 — 더 사양이 좋은 머신 또는 이미 한 번 Editor GUI로 연 적 있는(인덱스가 준비된) 프로젝트로 재검증 필요. 첫 실행이라면 `--unity-timeout`을 넉넉히 잡거나, 사전에 Editor GUI로 프로젝트를 한 번 열어 인덱싱을 끝내둔 뒤 CLI를 실행하는 것을 권장한다. (2026-08-05 후속: 사용자의 실제 프로젝트에서도 동일한 5분 타임아웃 실패가 재현되어, 기본값을 30분으로 늘리고 `--unity-timeout` 옵션으로 조절 가능하게 개선함.)
 
 ### 3.3 경로 기반 드라이브 진단
 - 사용자가 지정하거나 자동 감지한 다음 경로들의 드라이브 타입 판별:
@@ -171,6 +171,9 @@ unityrider-bench bench --cpu --disk
 
 # 리포트 파일로 저장
 unityrider-bench scan --output report.md
+
+# 도메인 리로드 측정 타임아웃을 60분으로 늘리기(기본 30분)
+unityrider-bench scan --project-path "D:\MyGame" --unity-timeout 60
 ```
 
 ---
