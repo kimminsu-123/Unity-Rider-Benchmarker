@@ -1,6 +1,7 @@
 using System.CommandLine;
 using UnityRiderBench.Benchmark;
 using UnityRiderBench.Models;
+using UnityRiderBench.PathAnalysis;
 using UnityRiderBench.SpecCollector;
 
 var projectPathOption = new Option<string?>("--project-path", "Unity 프로젝트 루트 경로");
@@ -19,7 +20,26 @@ var scanCommand = new Command("scan", "전체 진단 실행 (스펙 + 벤치마�
 };
 scanCommand.SetHandler((string? projectPath, string? riderPath, string? output) =>
 {
-    Console.WriteLine("scan: Phase 1~4 구현 예정");
+    if (!OperatingSystem.IsWindows())
+    {
+        Console.Error.WriteLine("scan 명령은 현재 Windows(WMI)만 지원합니다.");
+        return;
+    }
+
+    var spec = SystemSpecCollector.Collect();
+    PrintSpec(spec);
+
+    Console.WriteLine();
+    Console.WriteLine("=== 경로 진단 ===");
+    var pathItems = PathDiagnosisBuilder.Build(spec, projectPath, riderPath);
+    foreach (var item in pathItems)
+    {
+        var existsLabel = item.Exists ? "" : " (경로 없음)";
+        Console.WriteLine($"  [{item.Label}] {item.Path}{existsLabel} → {DescribeGrade(item.Grade)} {item.Comment}");
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("벤치마크 결과 통합 및 기준치 비교/파일 저장은 Phase 4에서 이어서 구현됩니다.");
 }, projectPathOption, riderPathOption, outputOption);
 
 var specCommand = new Command("spec", "정적 스펙 조회만 실행");
@@ -111,6 +131,14 @@ static void PrintSpec(SystemSpec spec)
     Console.WriteLine($"  {spec.Os.DotNetVersion}");
     Console.WriteLine($"  JDK: {(spec.Os.HasJdk ? "있음" : "없음")}");
 }
+
+static string DescribeGrade(Grade grade) => grade switch
+{
+    Grade.Good => "[양호]",
+    Grade.Warning => "[주의]",
+    Grade.Critical => "[경고]",
+    _ => "[?]",
+};
 
 static string DescribeDriveKind(DriveKind kind) => kind switch
 {
