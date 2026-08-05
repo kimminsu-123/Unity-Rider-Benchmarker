@@ -2,6 +2,8 @@ using System.CommandLine;
 using UnityRiderBench.Benchmark;
 using UnityRiderBench.Models;
 using UnityRiderBench.PathAnalysis;
+using UnityRiderBench.Report;
+using UnityRiderBench.Rules;
 using UnityRiderBench.SpecCollector;
 
 var projectPathOption = new Option<string?>("--project-path", "Unity 프로젝트 루트 경로");
@@ -27,19 +29,19 @@ scanCommand.SetHandler((string? projectPath, string? riderPath, string? output) 
     }
 
     var spec = SystemSpecCollector.Collect();
-    PrintSpec(spec);
 
-    Console.WriteLine();
-    Console.WriteLine("=== 경로 진단 ===");
-    var pathItems = PathDiagnosisBuilder.Build(spec, projectPath, riderPath);
-    foreach (var item in pathItems)
-    {
-        var existsLabel = item.Exists ? "" : " (경로 없음)";
-        Console.WriteLine($"  [{item.Label}] {item.Path}{existsLabel} → {DescribeGrade(item.Grade)} {item.Comment}");
-    }
+    Console.WriteLine("CPU/디스크/RAM 벤치마크 실행 중...");
+    var benchmark = new BenchmarkReport(
+        CpuBenchmark.Run(),
+        DiskIoBenchmark.Run(Path.GetTempPath()),
+        RamBenchmark.Run());
 
-    Console.WriteLine();
-    Console.WriteLine("벤치마크 결과 통합 및 기준치 비교/파일 저장은 Phase 4에서 이어서 구현됩니다.");
+    var pathDiagnosis = PathDiagnosisBuilder.Build(spec, projectPath, riderPath);
+    var gradedItems = BaselineRules.Evaluate(spec);
+
+    var report = new ScanReport(DateTimeOffset.Now, spec, benchmark, pathDiagnosis, gradedItems, DomainReload: null);
+
+    WriteReport(report, output);
 }, projectPathOption, riderPathOption, outputOption);
 
 var specCommand = new Command("spec", "정적 스펙 조회만 실행");
@@ -52,7 +54,7 @@ specCommand.SetHandler(() =>
     }
 
     var spec = SystemSpecCollector.Collect();
-    PrintSpec(spec);
+    ConsoleReporter.PrintSpec(spec);
 });
 
 var benchCommand = new Command("bench", "실측 벤치마크만 실행")
@@ -101,68 +103,18 @@ var rootCommand = new RootCommand("Unity + Rider 에디터 성능 벤치마크 C
 
 return await rootCommand.InvokeAsync(args);
 
-static void PrintSpec(SystemSpec spec)
+static void WriteReport(ScanReport report, string? outputPath)
 {
-    Console.WriteLine("=== CPU ===");
-    Console.WriteLine($"  {spec.Cpu.Name}");
-    Console.WriteLine($"  물리 코어 {spec.Cpu.PhysicalCores} / 논리 코어 {spec.Cpu.LogicalCores}");
-    Console.WriteLine($"  클럭: 현재 {spec.Cpu.CurrentClockMhz:0} MHz / 정격 최대 {spec.Cpu.MaxClockMhz:0} MHz");
-
-    Console.WriteLine();
-    Console.WriteLine("=== RAM ===");
-    Console.WriteLine($"  총 {FormatBytes(spec.Ram.TotalBytes)} / 사용 가능 {FormatBytes(spec.Ram.AvailableBytes)}");
-    Console.WriteLine($"  속도 {spec.Ram.SpeedMhz:0} MHz / 모듈 {spec.Ram.ChannelCount}개(근사치)");
-
-    Console.WriteLine();
-    Console.WriteLine("=== GPU ===");
-    var vram = spec.Gpu.VramBytes < 0 ? "확인 필요 (WMI 32비트 제약)" : FormatBytes(spec.Gpu.VramBytes);
-    Console.WriteLine($"  {spec.Gpu.Name} / VRAM {vram}");
-
-    Console.WriteLine();
-    Console.WriteLine("=== 디스크 ===");
-    foreach (var disk in spec.Disks)
+    if (string.IsNullOrWhiteSpace(outputPath))
     {
-        Console.WriteLine($"  {disk.DriveLetter} {DescribeDriveKind(disk.Kind)}  여유 {FormatBytes(disk.FreeBytes)} / 총 {FormatBytes(disk.TotalBytes)}");
+        ConsoleReporter.Print(report);
+        return;
     }
 
-    Console.WriteLine();
-    Console.WriteLine("=== OS / 런타임 ===");
-    Console.WriteLine($"  {spec.Os.OsVersion}");
-    Console.WriteLine($"  {spec.Os.DotNetVersion}");
-    Console.WriteLine($"  JDK: {(spec.Os.HasJdk ? "있음" : "없음")}");
-}
+    var content = Path.GetExtension(outputPath).Equals(".json", StringComparison.OrdinalIgnoreCase)
+        ? JsonReporter.Render(report)
+        : MarkdownReporter.Render(report);
 
-static string DescribeGrade(Grade grade) => grade switch
-{
-    Grade.Good => "[양호]",
-    Grade.Warning => "[주의]",
-    Grade.Critical => "[경고]",
-    _ => "[?]",
-};
-
-static string DescribeDriveKind(DriveKind kind) => kind switch
-{
-    DriveKind.Nvme => "NVMe SSD",
-    DriveKind.SataSsd => "SATA SSD",
-    DriveKind.Hdd => "HDD",
-    _ => "알 수 없음",
-};
-
-static string FormatBytes(long bytes)
-{
-    if (bytes < 0)
-    {
-        return "확인 필요";
-    }
-
-    string[] units = ["B", "KB", "MB", "GB", "TB"];
-    double value = bytes;
-    var unitIndex = 0;
-    while (value >= 1024 && unitIndex < units.Length - 1)
-    {
-        value /= 1024;
-        unitIndex++;
-    }
-
-    return $"{value:0.##} {units[unitIndex]}";
+    File.WriteAllText(outputPath, content);
+    Console.WriteLine($"리포트를 저장했습니다: {outputPath}");
 }
