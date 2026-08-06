@@ -61,6 +61,18 @@ public static class ConsoleReporter
         }
 
         Console.WriteLine();
+        Console.WriteLine("=== 프로젝트 규모 ===");
+        if (report.ProjectSize.Tier == ProjectSizeTier.Unknown)
+        {
+            Console.WriteLine("  확인 불가 (--project-path 미지정 또는 Assets 폴더 없음) — 아래 기준치는 중간 규모로 가정해 계산됨");
+        }
+        else
+        {
+            var assetsGb = report.ProjectSize.AssetsBytes / 1024.0 / 1024.0 / 1024.0;
+            Console.WriteLine($"  {ReportFormatting.DescribeTier(report.ProjectSize.Tier)} (Assets {assetsGb:0.#}GB, 스크립트 {report.ProjectSize.ScriptCount}개)");
+        }
+
+        Console.WriteLine();
         Console.WriteLine("=== 기준치 비교 ===");
         foreach (var item in report.GradedItems)
         {

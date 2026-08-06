@@ -6,5 +6,6 @@ public sealed record ScanReport(
     BenchmarkReport? Benchmark,
     IReadOnlyList<PathDiagnosisItem> PathDiagnosis,
     IReadOnlyList<GradedItem> GradedItems,
-    DomainReloadResult? DomainReload
+    DomainReloadResult? DomainReload,
+    ProjectSizeInfo ProjectSize
 );

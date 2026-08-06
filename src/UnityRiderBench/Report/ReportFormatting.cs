@@ -20,6 +20,14 @@ internal static class ReportFormatting
         _ => "알 수 없음",
     };
 
+    public static string DescribeTier(ProjectSizeTier tier) => tier switch
+    {
+        ProjectSizeTier.Small => "소규모",
+        ProjectSizeTier.Medium => "중간 규모",
+        ProjectSizeTier.Large => "대규모",
+        _ => "확인 불가",
+    };
+
     public static string FormatBytes(long bytes)
     {
         if (bytes < 0)

@@ -40,13 +40,14 @@ scanCommand.SetHandler((string? projectPath, string? riderPath, string? output, 
         RamBenchmark.Run());
 
     var pathDiagnosis = PathDiagnosisBuilder.Build(spec, projectPath, riderPath);
-    var gradedItems = BaselineRules.Evaluate(spec);
+    var projectSize = ProjectSizeAnalyzer.Analyze(projectPath);
+    var gradedItems = BaselineRules.Evaluate(spec, benchmark, projectSize.Tier);
 
     var domainReload = string.IsNullOrWhiteSpace(projectPath)
         ? null
         : TryRunDomainReloadProbe(projectPath, unityTimeoutMinutes);
 
-    var report = new ScanReport(DateTimeOffset.Now, spec, benchmark, pathDiagnosis, gradedItems, domainReload);
+    var report = new ScanReport(DateTimeOffset.Now, spec, benchmark, pathDiagnosis, gradedItems, domainReload, projectSize);
 
     WriteReport(report, output);
 }, projectPathOption, riderPathOption, outputOption, unityTimeoutOption);

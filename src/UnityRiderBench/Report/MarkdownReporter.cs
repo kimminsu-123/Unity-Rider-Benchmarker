@@ -51,6 +51,18 @@ public static class MarkdownReporter
             sb.AppendLine();
         }
 
+        sb.AppendLine("## 프로젝트 규모");
+        if (report.ProjectSize.Tier == ProjectSizeTier.Unknown)
+        {
+            sb.AppendLine("확인 불가 (--project-path 미지정 또는 Assets 폴더 없음) — 아래 기준치는 중간 규모로 가정해 계산됨");
+        }
+        else
+        {
+            var assetsGb = report.ProjectSize.AssetsBytes / 1024.0 / 1024.0 / 1024.0;
+            sb.AppendLine($"{ReportFormatting.DescribeTier(report.ProjectSize.Tier)} (Assets {assetsGb:0.#}GB, 스크립트 {report.ProjectSize.ScriptCount}개)");
+        }
+
+        sb.AppendLine();
         sb.AppendLine("## 기준치 비교");
         sb.AppendLine("| 분류 | 항목 | 측정값 | 기준 | 등급 | 코멘트 |");
         sb.AppendLine("|---|---|---|---|---|---|");

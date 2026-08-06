@@ -13,6 +13,12 @@ public static class DiskIoBenchmark
     private const int RandomBlockSizeBytes = 4 * 1024;
     private const int RandomOpCount = 500;
 
+    // 순차 측정은 64회 청크뿐인 단일 샘플이라 표본이 작아, 같은 물리 드라이브에서도 실행마다
+    // 값이 수 배씩 흔들리는 것이 실사용 중 확인됐다(예: 같은 NVMe에서 447 / 346 / 106 MB/s로 관측,
+    // 2026-08-06). JIT 워밍업이나 일시적 백그라운드 I/O 경합으로 추정되나 정확한 원인은 확인 필요.
+    // 여러 번 측정해 중앙값을 취해 단발성 노이즈가 등급 판정을 흔드는 것을 줄인다.
+    private const int SequentialTrialCount = 3;
+
     public static DiskIoBenchmarkResult Run(string targetDirectory)
     {
         Directory.CreateDirectory(targetDirectory);
@@ -21,8 +27,8 @@ public static class DiskIoBenchmark
 
         try
         {
-            var seqWriteMbPerSec = MeasureSequentialWrite(seqPath);
-            var seqReadMbPerSec = MeasureSequentialRead(seqPath);
+            var seqWriteMbPerSec = Median(SequentialTrialCount, () => MeasureSequentialWrite(seqPath));
+            var seqReadMbPerSec = Median(SequentialTrialCount, () => MeasureSequentialRead(seqPath));
 
             PrepareRandomFile(randPath);
             var randWriteIops = MeasureRandomIops(randPath, isWrite: true);
@@ -35,6 +41,18 @@ public static class DiskIoBenchmark
             TryDelete(seqPath);
             TryDelete(randPath);
         }
+    }
+
+    private static double Median(int trialCount, Func<double> measure)
+    {
+        var values = new double[trialCount];
+        for (var i = 0; i < trialCount; i++)
+        {
+            values[i] = measure();
+        }
+
+        Array.Sort(values);
+        return values[trialCount / 2];
     }
 
     private static double MeasureSequentialWrite(string path)
